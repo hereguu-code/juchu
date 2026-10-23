@@ -225,6 +225,25 @@ body[data-tab=search] main{padding-bottom:calc(var(--tabh) + env(safe-area-inset
 .steps{margin:6px 0 0;padding-left:20px;font-size:14px;color:var(--ink)}
 .steps li{margin:4px 0}
 
+/* 写真から自動入力 */
+.ocr-cta{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:12px;margin-bottom:18px;border-radius:12px;background:var(--accent-weak)}
+.ocr-cta span{font-size:13px;color:var(--accent);font-weight:600}
+.ocr-stage{display:grid;grid-template-columns:140px 1fr;gap:14px;align-items:center;margin:14px 0}
+.ocr-stage img{width:140px;height:140px;object-fit:cover;border-radius:10px;border:1px solid var(--line);background:var(--soft)}
+.ocr-status .st{font-size:14px;font-weight:600;color:var(--muted)}
+.bar{height:8px;border-radius:4px;background:var(--line);overflow:hidden;margin-bottom:8px}
+.bar i{display:block;height:100%;width:0;background:var(--accent);transition:width .3s}
+.ocr-text textarea{font-size:15px;min-height:140px}
+.tip{margin:10px 0 4px;font-size:14px}
+.tip summary{cursor:pointer;color:var(--accent);font-weight:600;padding:6px 0}
+h3.sub{margin:22px 0 10px;font-size:15px}
+.f.got input{background:var(--ok-bg);border-color:transparent}
+.matchinfo{margin:10px 0 4px;font-size:14px}
+.matchinfo .ok{color:var(--ok);font-weight:700}
+.matchinfo .nw{color:var(--accent);font-weight:600}
+.ocr-opts{display:flex;flex-direction:column;gap:0;margin-top:6px}
+.ocr-opts .chk input{accent-color:var(--accent)}
+
 #toast{position:fixed;left:50%;bottom:calc(var(--tabh) + env(safe-area-inset-bottom) + 90px);transform:translate(-50%,20px);background:#1d2433;color:#fff;padding:12px 20px;border-radius:12px;font-size:15px;font-weight:600;opacity:0;pointer-events:none;transition:.25s;z-index:100;max-width:90%;text-align:center}
 #toast.show{opacity:1;transform:translate(-50%,0)}
 </style>
@@ -408,6 +427,190 @@ async function handleDrawingAct(act,el,D,refresh){
  return false;
 }
 
+/* ========== 写真から文字を読み取る（iPad内で処理・ネット不要） ========== */
+const OCR_FILES=['ocr/tesseract.min.js','ocr/worker.min.js','ocr/tesseract-core-simd-lstm.wasm.js','ocr/tesseract-core-lstm.wasm.js','ocr/tesseract-core-relaxedsimd-lstm.wasm.js','ocr/jpn.traineddata.gz'];
+let ocrWorker=null,ocrIdle=null,ocrProg=()=>{};
+const loadScript=src=>new Promise((res,rej)=>{if(window.Tesseract)return res();const s=document.createElement('script');s.src=src;s.onload=res;s.onerror=()=>rej(new Error('読み取り機能を読み込めませんでした（初回はネット接続が必要です）'));document.head.appendChild(s)});
+async function getOcrWorker(){
+ if(ocrWorker)return ocrWorker;
+ await loadScript('ocr/tesseract.min.js');
+ const base=new URL('ocr/',location.href).href;
+ ocrWorker=await Tesseract.createWorker('jpn',1,{workerPath:base+'worker.min.js',corePath:base,langPath:base,gzip:true,workerBlobURL:false,logger:m=>ocrProg(m)});
+ return ocrWorker;
+}
+const loadImage=src=>new Promise((res,rej)=>{const i=new Image();i.onload=()=>res(i);i.onerror=()=>rej(new Error('画像を開けませんでした'));i.src=src});
+async function prepForOcr(blob){
+ const u=URL.createObjectURL(blob);const img=await loadImage(u);URL.revokeObjectURL(u);
+ let w=img.naturalWidth,h=img.naturalHeight;const L=Math.max(w,h);const s=L>2600?2600/L:L<1400?1400/L:1;w=Math.round(w*s);h=Math.round(h*s);
+ const c=document.createElement('canvas');c.width=w;c.height=h;const g=c.getContext('2d');g.drawImage(img,0,0,w,h);
+ // グレー化＋コントラスト補正（影や紙の黄ばみを軽減）
+ const d=g.getImageData(0,0,w,h),p=d.data,hist=new Uint32Array(256);
+ for(let i=0;i<p.length;i+=4){const y=(p[i]*299+p[i+1]*587+p[i+2]*114)/1000|0;p[i]=y;hist[y]++}
+ const n=w*h;let lo=0,hi=255,acc=0;for(;lo<255;lo++){acc+=hist[lo];if(acc>n*.01)break}acc=0;for(;hi>0;hi--){acc+=hist[hi];if(acc>n*.02)break}
+ const sc=255/Math.max(1,hi-lo);for(let i=0;i<p.length;i+=4){const v=Math.max(0,Math.min(255,(p[i]-lo)*sc));p[i]=p[i+1]=p[i+2]=v}
+ // 表の罫線を消す（罫線があると表の中の文字を読み飛ばしやすいため）
+ const dark=new Uint8Array(n);for(let i=0,j=0;j<n;i+=4,j++)dark[j]=p[i]<140?1:0;
+ const kill=new Uint8Array(n),minH=Math.round(w*.12),minV=Math.round(Math.max(w,h)*.045);
+ for(let y=0;y<h;y++){let x=0;while(x<w){if(!dark[y*w+x]){x++;continue}let e=x;while(e<w&&dark[y*w+e])e++;if(e-x>=minH)for(let k=x;k<e;k++)kill[y*w+k]=1;x=e}}
+ for(let x=0;x<w;x++){let y=0;while(y<h){if(!dark[y*w+x]){y++;continue}let e=y;while(e<h&&dark[e*w+x])e++;if(e-y>=minV)for(let k=y;k<e;k++)kill[k*w+x]=1;y=e}}
+ for(let j=0,i=0;j<n;j++,i+=4)if(kill[j])p[i]=p[i+1]=p[i+2]=255;
+ g.putImageData(d,0,0);return c;
+}
+async function runOcr(blob,onProg){
+ ocrProg=onProg||(()=>{});clearTimeout(ocrIdle);
+ const w=await getOcrWorker();const c=await prepForOcr(blob);const{data}=await w.recognize(c);
+ ocrIdle=setTimeout(()=>{if(ocrWorker){ocrWorker.terminate();ocrWorker=null}},120000);
+ return cleanOcr(data.text);
+}
+async function ocrReady(){if(!('caches' in window))return null;try{for(const f of OCR_FILES)if(!(await caches.match(new URL(f,location.href).href)))return false;return true}catch(e){return null}}
+
+/* ---- 読み取った文字から注文内容を取り出す ---- */
+const JCH='[\\u3040-\\u30ff\\u3400-\\u9fff\\uf900-\\ufaff々〆ー]';
+function cleanOcr(t){
+ t=String(t||'').normalize('NFKC').replace(/\r/g,'').replace(/[ \t]+/g,' ');
+ t=t.replace(new RegExp(`(${JCH}) (?=${JCH})`,'g'),'$1');
+ return t.split('\n').map(s=>s.trim()).filter(Boolean).join('\n');
+}
+function mkDate(y,m,d){if(!(m>=1&&m<=12&&d>=1&&d<=31))return null;const dt=new Date(y,m-1,d);return dt.getMonth()===m-1?toStr(dt):null}
+function guessYear(m,d){const t=new Date();let y=t.getFullYear();if(new Date(y,m-1,d)<new Date(y,t.getMonth(),t.getDate()-120))y++;return y}
+function findDates(s){
+ const R=[ // [正規表現, 前置グループ数, 変換]
+  [/(\d{4})\s*[\/\-.年]\s*(\d{1,2})\s*[\/\-.月]\s*(\d{1,2})/g,0,m=>mkDate(+m[1],+m[2],+m[3])],
+  [/(?:令和|R)\s*(\d{1,2}|元)\s*[年.\/\-]\s*(\d{1,2})\s*[月.\/\-]\s*(\d{1,2})/g,0,m=>mkDate(2018+(m[1]==='元'?1:+m[1]),+m[2],+m[3])],
+  [/(^|[^\d\/.])(\d{2})[\/.](\d{1,2})[\/.](\d{1,2})(?![\d\/.])/g,1,m=>mkDate(2000+ +m[2],+m[3],+m[4])],
+  [/(^|[^\d年\/.])(\d{1,2})\s*月\s*(\d{1,2})\s*日/g,1,m=>mkDate(guessYear(+m[2],+m[3]),+m[2],+m[3])],
+  [/(^|[^\d\/.:])(\d{1,2})\/(\d{1,2})(?![\d\/])/g,1,m=>mkDate(guessYear(+m[2],+m[3]),+m[2],+m[3])],
+ ];
+ const out=[],used=[];
+ for(const[re,pre,fn]of R){re.lastIndex=0;let m;while((m=re.exec(s))){const st=m.index+(pre?m[1].length:0),en=m.index+m[0].length;if(used.some(([a,b])=>st<b&&en>a))continue;const v=fn(m);if(v){out.push({i:st,v});used.push([st,en])}}}
+ return out.sort((a,b)=>a.i-b.i);
+}
+const LBL={
+ name:/(品名|製品名|品目名?|商品名|名称)/,
+ model:/(型番|型式|品番|図番|図面番号|部品番号|型名|MODEL|P\/N)/i,
+ qty:/(数量|個数|員数|台数|本数|注文数|QTY)/i,
+ due:/(希望納期|納入希望日|納入予定日|納入期日|納入日|納品日|納期)/,
+ order:/(注文日|発注日|発行日|作成日|受付日|日付)/,
+ cust:/(発注者|発注元|注文者|注文元|得意先|顧客名|顧客|お客様名|貴社名|御社名|会社名)/,
+};
+const ANY_LBL=new RegExp([LBL.name,LBL.model,LBL.qty,LBL.due,LBL.order,LBL.cust].map(r=>r.source).join('|')+'|単価|金額|備考|摘要|合計|TEL|FAX|〒','i');
+const COMP=/(株式会社|有限会社|合同会社|\(株\)|\(有\)|㈱|㈲|工業|製作所|工作所|産業|商事|商会|鉄工|機械|化成|工機|精機|電機|興業|化学|ゴム)/;
+const UNIT='(?:個|コ|本|台|枚|ヶ|ケ|セット|set|pcs|PCS|式|組|ケース)';
+const MODEL_TOKEN=/[A-Za-z]{1,6}[\-_]?\d{1,7}(?:[\-_][A-Za-z0-9]+)*[A-Za-z]?/g;
+function labelVal(lines,re){
+ for(let i=0;i<lines.length;i++){const m=lines[i].match(re);if(!m)continue;
+  let v=lines[i].slice(m.index+m[0].length).replace(/^[\s:：・=\-]+/,'');
+  const k=v.search(ANY_LBL);if(k>=0)v=v.slice(0,k);v=v.trim();
+  if(!v&&lines[i+1]&&!ANY_LBL.test(lines[i+1].slice(0,6)))v=lines[i+1].trim();
+  if(v)return v}
+ return '';
+}
+function labelDate(lines,re,stop){
+ for(let i=0;i<lines.length;i++){const m=lines[i].match(re);if(!m)continue;let s=lines[i].slice(m.index+m[0].length);const k=s.search(stop);if(k>=0)s=s.slice(0,k);
+  let ds=findDates(s);if(!ds.length&&lines[i+1])ds=findDates(lines[i+1]);if(ds.length)return ds[0].v}
+ return '';
+}
+const companyName=s=>{s=s.replace(/(TEL|FAX|電話|〒|住所|担当).*$/i,'').replace(/[:：]/g,' ').trim();const t=s.split(/\s+/);return(t.find(x=>COMP.test(x))||t[0]||'').slice(0,40)};
+function parseOrderText(raw){
+ const text=cleanOcr(raw),r={};if(!text)return r;
+ const lines=text.split('\n'),nt=norm(text);
+ let own='';try{own=norm(localStorage.getItem('kanri-own')||'')}catch(e){}
+ const isOwn=s=>own&&norm(s).includes(own);
+ // 製品：登録済みの型番・製品名が文中にあれば最優先
+ let best=null;
+ for(const p of state.products){const k=norm(p.model);if(k.length>=3&&nt.includes(k)&&(!best||k.length>norm(best.model).length))best=p}
+ if(!best)for(const p of state.products){const k=norm(p.name);if(k.length>=3&&nt.includes(k)&&(!best||k.length>norm(best.name).length))best=p}
+ if(best){r.productId=best.id;r.name=best.name;r.model=best.model}
+ // 表形式（品名・型番・数量が見出し行に並び、次の行に値）
+ const table={};
+ const ANY_G=new RegExp(ANY_LBL.source,'gi');
+ for(let i=0;i<lines.length-1;i++){const hs=[LBL.name,LBL.model,LBL.qty].filter(re=>re.test(lines[i])).length;if(hs<2)continue;
+  if(lines[i].replace(ANY_G,'').replace(/[\s|｜「」\[\]():：]/g,'').length>3)continue; // 見出しだけの行のみ表とみなす
+  const row=lines[i+1];if(ANY_LBL.test(row.slice(0,4)))continue;const toks=row.split(/\s+/).filter(Boolean);
+  const mt=toks.find(t=>/[A-Za-z]/.test(t)&&/\d/.test(t)&&/^[A-Za-z0-9\-_.\/]+$/.test(t));if(mt)table.model=mt;
+  const qt=toks.find(t=>t!==mt&&new RegExp(`^\\d[\\d,]{0,6}${UNIT}?$`).test(t));if(qt)table.qty=qt.replace(/[^\d]/g,'');
+  const nm=toks.find(t=>new RegExp(JCH).test(t)&&!new RegExp(`^\\d*${UNIT}$`).test(t));if(nm)table.name=nm;break}
+ const hasJ=t=>new RegExp(JCH).test(t||''),okModel=t=>!!t&&/[A-Za-z0-9]/.test(t)&&/\d/.test(t)&&!hasJ(t);
+ if(!r.model){let v=labelVal(lines,LBL.model);v=v&&v.split(/\s+/)[0];r.model=table.model||(okModel(v)?v:'')}
+ if(!r.model){for(const l of lines){if(/(TEL|FAX|〒|No\.?|電話)/i.test(l))continue;const m=l.match(MODEL_TOKEN);if(m){r.model=m[0];break}}}
+ if(!best&&r.model){const p=findProductBy('',r.model);if(p){r.productId=p.id;r.name=p.name;r.model=p.model}}
+ if(!r.name){let v=table.name||'';if(!v){v=labelVal(lines,LBL.name);if(v){if(r.model)v=v.split(r.model).join(' ');v=v.replace(new RegExp(`\\d[\\d,]*\\s*${UNIT}`,'g'),' ').trim();v=v.split(/\s+/).find(hasJ)||''}}r.name=v}
+ // 見出しが無い場合：型番と同じ行にある日本語の語を製品名とみなす
+ if(!r.name&&r.model){const l=lines.find(l=>l.includes(r.model));if(l){const t=l.split(/\s+/).map(x=>x.replace(ANY_G,'')).filter(x=>hasJ(x)&&!new RegExp(`^\\d*${UNIT}$`).test(x)).sort((a,b)=>b.length-a.length)[0];if(t)r.name=t}}
+ // 数量
+ let q=table.qty||'';if(!q){q=labelVal(lines,LBL.qty);q=(q.match(/\d[\d,]*/)||[''])[0].replace(/,/g,'')}
+ if(!q){const m=text.match(new RegExp(`(\\d[\\d,]{0,6})\\s*${UNIT}(?![A-Za-z])`));if(m)q=m[1].replace(/,/g,'')}
+ r.qty=q;
+ // 日付
+ r.dueDate=labelDate(lines,LBL.due,LBL.order);r.orderDate=labelDate(lines,LBL.order,LBL.due);
+ const all=[...new Set(findDates(text).map(x=>x.v))].sort();const td=today();
+ if(!r.orderDate&&!r.dueDate&&all.length){if(all.length>=2){r.orderDate=all[0];r.dueDate=all[all.length-1]}else if(all[0]>td)r.dueDate=all[0];else r.orderDate=all[0]}
+ else if(r.orderDate&&!r.dueDate)r.dueDate=all.find(v=>v>r.orderDate)||'';
+ else if(!r.orderDate&&r.dueDate)r.orderDate=all.filter(v=>v<r.dueDate&&v<=td).pop()||'';
+ // 顧客名：過去の顧客名 → 見出し → 会社名らしい行（「御中」「様」は自社宛てなので除外）
+ const known=[...new Set(state.orders.map(o=>o.customer).filter(c=>c&&norm(c).length>=2))].sort((a,b)=>b.length-a.length);
+ r.customer=known.find(c=>nt.includes(norm(c))&&!isOwn(c))||'';
+ if(!r.customer){const v=labelVal(lines,LBL.cust);if(v&&!isOwn(v))r.customer=companyName(v)}
+ if(!r.customer){const l=lines.find(l=>COMP.test(l)&&!/(御中|様|殿|注文書|発注書|注文請書|見積)/.test(l)&&!isOwn(l));if(l)r.customer=companyName(l)}
+ r.urgent=/(大至急|至急|特急|急ぎ|緊急|URGENT|ASAP)/i.test(text);
+ return r;
+}
+
+function openOcrDialog(onApply){
+ let photo=null,busy=false;const touched=new Set();
+ const FIELDS=[['customer','顧客名','c3'],['pname','製品名','c3'],['pmodel','型番','c3'],['qty','数量','c3'],['orderDate','注文日','c3'],['dueDate','納期','c3']];
+ const w=openModal(`<div class="mhead"><h2>写真から自動入力</h2><span class="sp"></span><button class="icon-btn" data-close aria-label="閉じる">${I('x')}</button></div>
+ <form class="mbody" autocomplete="off" onsubmit="return false">
+  <div class="btnrow"><button type="button" class="btn primary" data-o="cam">${I('camera')}注文書を撮影</button><button type="button" class="btn" data-o="lib">${I('image')}写真を選ぶ</button></div>
+  <div class="ocr-stage" hidden><img alt=""><div class="ocr-status"><div class="bar"><i></i></div><span class="st">準備中…</span></div></div>
+  <label class="f ocr-text" style="margin-top:14px"><span>読み取った文字 <small>直接直したり、貼り付けたりできます</small></span><textarea name="ocrText" placeholder="ここに注文書の文字が入ります"></textarea></label>
+  <details class="tip"><summary>もっと正確に読み取るには（iPadの「テキスト認識表示」を使う）</summary>
+   <ol class="steps"><li>「写真」アプリで注文書の写真を開く</li><li>文字を長押し →「すべてを選択」→「コピー」</li><li>上の欄を長押しして「ペースト」</li></ol>
+   <p class="hint">上の欄を長押しして「テキストをスキャン」を選ぶと、カメラを向けるだけで直接読み取ることもできます。</p></details>
+  <h3 class="sub">入力される内容 <small style="font-weight:500;color:var(--muted)">（違っていたら直してください）</small></h3>
+  <div class="grid">${FIELDS.map(([n,l,c])=>`<label class="f ${c}" data-fld="${n}"><span>${l}</span><input name="${n}" ${/Date/.test(n)?'type="date"':n==='qty'?'type="number" inputmode="numeric"':''}></label>`).join('')}
+   <label class="f c6 urgent-toggle"><input type="checkbox" name="urgent"><span class="box">${I('flag')}急ぎの品</span></label></div>
+  <div class="matchinfo"></div>
+  <div class="ocr-opts"><label class="chk"><input type="checkbox" name="attach" checked>写真を備考に添付する</label><label class="chk"><input type="checkbox" name="appendText">読み取った文字を備考に追記する</label></div>
+ </form>
+ <div class="mfoot"><span class="sp"></span><button class="btn" data-close>キャンセル</button><button class="btn primary" data-o="apply">${I('check')}この内容で入力</button></div>`,{wide:true,sticky:true});
+ const form=$('form',w),F=n=>form.elements.namedItem(n),ta=F('ocrText');
+ const update=()=>{
+  const r=parseOrderText(ta.value);const map={customer:r.customer,pname:r.name,pmodel:r.model,qty:r.qty,orderDate:r.orderDate,dueDate:r.dueDate};
+  for(const[n,v]of Object.entries(map)){if(touched.has(n))continue;F(n).value=v||'';$(`[data-fld="${n}"]`,w).classList.toggle('got',!!v)}
+  if(!touched.has('urgent'))F('urgent').checked=!!r.urgent;
+  const p=prodById(r.productId);const mi=$('.matchinfo',w);
+  mi.innerHTML=!ta.value.trim()?'':p?`<span class="ok">${I('check')} 登録済みの製品「${esc(p.name||'')}${p.model?' / '+esc(p.model):''}」と一致しました。図面も自動で入ります。</span>`:(F('pname').value||F('pmodel').value)?'<span class="nw">登録済みの製品とは一致しませんでした。新しい製品として登録されます。</span>':'';
+ };
+ let tmr;ta.addEventListener('input',()=>{clearTimeout(tmr);tmr=setTimeout(update,250)});
+ form.addEventListener('input',e=>{const n=e.target.name;if(n&&n!=='ocrText'&&n!=='attach'&&n!=='appendText'){touched.add(n);const f=e.target.closest('[data-fld]');if(f)f.classList.remove('got')}});
+ const setSt=(t,p)=>{$('.st',w).textContent=t;if(p!=null)$('.bar i',w).style.width=Math.round(p*100)+'%'};
+ const read=async capture=>{
+  if(busy)return;const[f]=await pickFiles({accept:'image/*',capture,multiple:false});if(!f)return;
+  busy=true;photo=f;const stg=$('.ocr-stage',w);stg.hidden=false;const u=URL.createObjectURL(f);$('img',stg).src=u;setSt('準備中…',0.02);
+  try{
+   const text=await runOcr(f,m=>{
+    if(m.status==='recognizing text')setSt(`文字を読み取り中… ${Math.round(m.progress*100)}%`,0.3+m.progress*0.7);
+    else if(/load|initializ/.test(m.status||''))setSt('読み取りの準備中…（初回は少し時間がかかります）',0.05+0.25*(m.progress||0));
+   });
+   ta.value=text;setSt(text?'読み取りが終わりました。内容を確認してください。':'文字が見つかりませんでした。明るい場所で、注文書が画面いっぱいに写るように撮り直してください。',1);update();
+  }catch(e){console.error(e);setSt('読み取りに失敗しました：'+(e&&e.message||e),0)}
+  finally{busy=false}
+ };
+ w.addEventListener('click',async e=>{
+  const el=e.target.closest('[data-o]');if(!el)return;const o=el.dataset.o;
+  if(o==='cam'||o==='lib')read(o==='cam');
+  else if(o==='apply'){
+   if(busy){toast('読み取りが終わるまでお待ちください');return}
+   const r={customer:F('customer').value.trim(),name:F('pname').value.trim(),model:F('pmodel').value.trim(),qty:F('qty').value.trim(),orderDate:F('orderDate').value,dueDate:F('dueDate').value,urgent:F('urgent').checked};
+   if(F('attach').checked&&photo){const b=await compress(photo,1600,.82);r.photoId=(await storeFile(b,photo.name||'注文書.jpg')).id}
+   if(F('appendText').checked&&ta.value.trim())r.noteText=ta.value.trim();
+   delete w.dataset.sticky;closeModal(w);onApply(r);
+  }
+ });
+ return w;
+}
+
 /* ========== 1. 注文 ========== */
 function groupOf(o){const d=daysLeft(o.dueDate);if(d===null)return'納期未設定';if(d<0)return'期限切れ';if(d===0)return'今日';if(d===1)return'明日';if(d<=7)return'1週間以内';return'それ以降'}
 function dueBlock(o){
@@ -436,7 +639,7 @@ function orderCard(o){
 }
 function renderOrders(){
  $('#title').textContent='注文一覧';
- $('#topActions').innerHTML=`<button class="btn primary" data-action="new-order">${I('plus')}注文を登録</button>`;
+ $('#topActions').innerHTML=`<button class="btn" data-action="new-order-ocr">${I('camera')}写真から登録</button><button class="btn primary" data-action="new-order">${I('plus')}注文を登録</button>`;
  $('#view').innerHTML=`<div class="toolbar">
   <div class="seg" id="oseg">${[['open','未完了'],['done','完了'],['all','すべて']].map(([v,l])=>`<button data-action="ofilter" data-v="${v}" class="${state.orderFilter===v?'on':''}">${l}</button>`).join('')}</div>
   <label class="chk"><input type="checkbox" id="urgentTop" ${state.urgentTop?'checked':''}>急ぎを先頭に</label>
@@ -470,6 +673,7 @@ function openOrderForm(order,preset={}){
  const D={prodId:p?p.id:null,drawings:p?clone(p.drawings||[]):[],ironUrl:p?p.ironUrl||'':'',liningUrl:p?p.liningUrl||'':'',photos:[...(o.photos||[])],newPhotos:[],prevAuto:isNew||!o.prevOrderDate};
  const w=openModal(`<div class="mhead"><h2>${isNew?'注文を登録':'注文を編集'}</h2><span class="sp"></span><button class="icon-btn" data-close aria-label="閉じる">${I('x')}</button></div>
  <form class="mbody" autocomplete="off" onsubmit="return false">
+  <div class="ocr-cta"><button type="button" class="btn primary" data-act="ocr">${I('camera')}写真から自動入力</button><span>注文書やFAXを撮ると、顧客名・製品・数量・納期などを読み取って入力します</span></div>
   <div class="grid">
    <label class="f c4"><span>顧客名</span><input name="customer" list="dlCust" value="${esc(o.customer)}"></label>
    <label class="f c2 urgent-toggle"><input type="checkbox" name="urgent" ${o.urgent?'checked':''}><span class="box">${I('flag')}急ぎの品</span></label>
@@ -514,11 +718,21 @@ function openOrderForm(order,preset={}){
  F('prevOrderDate').addEventListener('input',()=>{D.prevAuto=false;refreshLink()});
  form.addEventListener('input',e=>{if(e.target.name==='ironUrl'||e.target.name==='liningUrl')D[e.target.name]=e.target.value});
  refreshDraw();refreshPhotos();refreshLink();
+ const applyOcr=r=>{
+  const set=(n,v)=>{if(v)F(n).value=v};
+  set('customer',r.customer);set('pname',r.name);set('pmodel',r.model);set('qty',r.qty);set('orderDate',r.orderDate);set('dueDate',r.dueDate);
+  if(r.urgent)F('urgent').checked=true;
+  if(r.photoId){D.photos.push(r.photoId);D.newPhotos.push(r.photoId);refreshPhotos()}
+  if(r.noteText)F('note').value=(F('note').value?F('note').value+'\n':'')+r.noteText;
+  relink();toast('読み取った内容を入力しました。確認して保存してください');
+ };
+ if(preset.ocr)openOcrDialog(applyOcr);
 
  w.addEventListener('click',async e=>{
   const el=e.target.closest('[data-act]');if(!el)return;const act=el.dataset.act;e.stopPropagation();
   if(await handleDrawingAct(act,el,D,refreshDraw))return;
-  if(act==='p-cam'||act==='p-lib'){const ids=await addPhotos(act==='p-cam');if(ids.length){D.photos.push(...ids);D.newPhotos.push(...ids);refreshPhotos();toast(`写真を${ids.length}枚追加しました`)}}
+  if(act==='ocr')openOcrDialog(applyOcr);
+  else if(act==='p-cam'||act==='p-lib'){const ids=await addPhotos(act==='p-cam');if(ids.length){D.photos.push(...ids);D.newPhotos.push(...ids);refreshPhotos();toast(`写真を${ids.length}枚追加しました`)}}
   else if(act==='p-del'){if(confirm('この写真を備考から外しますか？')){D.photos.splice(+el.dataset.i,1);refreshPhotos()}}
   else if(act==='p-open')openViewer(D.photos,+el.dataset.i);
   else if(act==='delete'){if(!confirm('この注文を削除しますか？（元に戻せません）'))return;await DB.del('orders',o.id);state.orders=state.orders.filter(x=>x.id!==o.id);closeModal(w);refreshDatalists();render();toast('注文を削除しました');gcFiles()}
@@ -538,7 +752,7 @@ function openOrderForm(order,preset={}){
    delete w.dataset.sticky;closeModal(w);refreshDatalists();render();toast(isNew?'注文を登録しました':'保存しました');gcFiles();
   }
  });
- if(isNew)setTimeout(()=>F('customer').focus(),50);
+ if(isNew&&!preset.ocr)setTimeout(()=>F('customer').focus(),50);
 }
 
 /* ========== 2. 製品管理 ========== */
@@ -695,14 +909,30 @@ async function renderSettings(){
   ${lastDays===null||lastDays>=7?`<div class="warnbox">${lastDays===null?'まだバックアップがありません。':`最後のバックアップから${lastDays}日経っています。`}iPadの故障や紛失に備えて、定期的に書き出してください。</div>`:''}
   <p>データはこのiPadの中だけに保存されています。書き出したファイルは「ファイル」アプリやAirDropでPCに保存できます。${last?`<br>前回の書き出し：${new Date(last).toLocaleString('ja-JP')}`:''}</p>
   <div class="btnrow"><button class="btn primary" data-action="export">${I('down')}書き出す（写真・図面含む）</button><button class="btn" data-action="import">${I('up')}バックアップから復元</button></div></div>
+ <div class="panel"><h3>写真から自動入力</h3>
+  <p>注文書の写真から文字を読み取る機能です。読み取りはiPadの中で行い、写真が外部に送られることはありません。</p>
+  <div class="kv"><div>オフラインでの読み取り<b id="ocrState">確認中…</b></div></div>
+  <div class="btnrow" style="margin:6px 0 16px"><button class="btn" data-action="ocr-download">${I('down')}読み取り機能をダウンロード（約14MB）</button></div>
+  <label class="f" style="max-width:420px"><span>自社名（読み取り時に顧客名と間違えないよう除外します）</span><input id="ownName" placeholder="例：〇〇工業株式会社" value="${esc((()=>{try{return localStorage.getItem('kanri-own')||''}catch(e){return ''}})())}"></label></div>
  <div class="panel"><h3>使い方のヒント</h3><ul class="steps">
   <li>注文で入力した製品名・型番は製品管理に自動登録され、図面は次回の注文でも呼び出されます。</li>
   <li>前回の注文日は、同じ製品の過去の注文から自動で入ります。</li>
+  <li>「写真から登録」で注文書を撮ると、顧客名・製品・数量・納期を読み取ります。登録済みの型番が写っていれば、製品と図面も自動で呼び出します。</li>
   <li>製品一覧の「撮影して登録」で、撮った写真がその製品にすぐ保存されます。</li>
   <li>音声ボタンが使えない場合は、キーボードのマイクボタンで話すと入力できます。</li></ul></div>
- <p class="hint" style="text-align:center">受注・製品管理 v1.0</p>`;
+ <p class="hint" style="text-align:center">受注・製品管理 v1.1</p>`;
+ $('#ownName').onchange=e=>{try{localStorage.setItem('kanri-own',e.target.value.trim())}catch(err){}toast('自社名を保存しました')};
+ showOcrState();
  try{if(navigator.storage&&navigator.storage.estimate){const e=await navigator.storage.estimate();$('#usage').textContent=(e.usage/1048576).toFixed(1)+' MB'}}catch(e){}
  try{if(navigator.storage&&navigator.storage.persisted){$('#persist').textContent=(await navigator.storage.persisted())?'有効':'標準'}}catch(e){}
+}
+async function showOcrState(){const el=$('#ocrState');if(!el)return;const r=await ocrReady();el.textContent=r===null?'—':r?'準備完了':'未ダウンロード';el.style.color=r?'var(--ok)':r===false?'var(--warn)':''}
+async function downloadOcr(){
+ if(!navigator.serviceWorker||!navigator.serviceWorker.controller){toast('ホーム画面に追加して起動してから実行してください');return}
+ const el=$('#ocrState');let i=0;
+ try{for(const f of OCR_FILES){if(el)el.textContent=`ダウンロード中 ${++i}/${OCR_FILES.length}`;const r=await fetch(f);if(!r.ok)throw new Error(f);await r.blob()}toast('読み取り機能をダウンロードしました')}
+ catch(e){toast('ダウンロードに失敗しました。ネット接続を確認してください')}
+ showOcrState();
 }
 const blobToDataURL=b=>new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(r.result);r.onerror=rej;r.readAsDataURL(b)});
 function dataURLtoBlob(u){const[h,d]=u.split(',');const type=(h.match(/data:([^;]*)/)||[])[1]||'';const bin=atob(d);const a=new Uint8Array(bin.length);for(let i=0;i<bin.length;i++)a[i]=bin.charCodeAt(i);return new Blob([a],{type})}
@@ -743,6 +973,7 @@ document.addEventListener('click',async e=>{
  const a=el.dataset.action,id=el.dataset.id;
  switch(a){
   case 'new-order':openOrderForm(null);break;
+  case 'new-order-ocr':openOrderForm(null,{ocr:true});break;
   case 'edit-order':openOrderForm(state.orders.find(o=>o.id===id));break;
   case 'new-order-for':openOrderForm(null,{productId:id});break;
   case 'new-product':openProductForm(null);break;
@@ -756,6 +987,7 @@ document.addEventListener('click',async e=>{
   case 'suggest':runSearch(el.dataset.q);break;
   case 'clear-chat':state.chat=[];renderSearch();break;
   case 'export':exportData().catch(err=>alert('書き出しに失敗しました：'+err.message));break;
+  case 'ocr-download':downloadOcr();break;
   case 'import':importData().catch(err=>alert('復元に失敗しました：'+err.message));break;
  }
 });
