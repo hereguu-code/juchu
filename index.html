@@ -237,7 +237,16 @@ body[data-tab=search] main{padding-bottom:calc(var(--tabh) + env(safe-area-inset
 .tip{margin:10px 0 4px;font-size:14px}
 .tip summary{cursor:pointer;color:var(--accent);font-weight:600;padding:6px 0}
 h3.sub{margin:22px 0 10px;font-size:15px}
-.f.got input{background:var(--ok-bg);border-color:transparent}
+.f.got input,.f.got .proc-btn{background:var(--ok-bg);border-color:transparent}
+.proc-btn{display:flex;align-items:center;gap:6px;flex-wrap:wrap;width:100%;min-height:48px;padding:6px 12px;border:1px solid var(--line);background:var(--card);border-radius:10px;text-align:left;font-size:17px}
+.proc-btn .ph-t{color:var(--muted);font-size:16px}
+.proc-btn .ic{margin-left:auto;color:var(--muted)}
+.ptag{display:inline-flex;align-items:center;padding:3px 10px;border-radius:999px;background:var(--accent-weak);color:var(--accent);font-size:14px;font-weight:700;white-space:nowrap}
+.prod .ptag{font-size:13px;margin-right:6px;vertical-align:3px}
+.proc-list{display:flex;flex-direction:column;gap:10px}
+.proc-opt{display:flex;align-items:center;gap:14px;min-height:60px;padding:0 18px;border:2px solid var(--line);border-radius:12px;font-size:19px;font-weight:700;cursor:pointer}
+.proc-opt input{width:28px;height:28px;accent-color:var(--accent);flex:none}
+.proc-opt:has(input:checked){border-color:var(--accent);background:var(--accent-weak);color:var(--accent)}
 .f.guess input{background:var(--warn-bg);outline:2px solid var(--warn);outline-offset:-2px}
 .f>span em{font-weight:600}
 .matchinfo{margin:10px 0 4px;font-size:14px}
@@ -547,6 +556,7 @@ function parseOrderText(raw){
   for(const c of cs){if(!c)continue;const v=companyName(c);if(looksCompany(v)&&!isOwn(v)&&!/(御中|様|殿)$/.test(c.trim())){r.customer=v;break}}}}
  if(!r.customer){const l=lines.find(l=>COMP.test(l)&&!/(御中|様|殿|注文書|発注書|注文請書|見積)/.test(l)&&!isOwn(l));if(l)r.customer=companyName(l)}
  r.urgent=/(大至急|至急|特急|急ぎ|緊急|URGENT|ASAP)/i.test(text);
+ r.process=PROCESSES.filter(k=>PROC_RE[k].test(text));
  // 備考に入れる参考情報（受注No.・注文番号・使用ライニング・寸法など）
  const ex=[];
  const no=text.match(/受注\s*No\.?\s*[:：]?\s*([A-Za-z0-9\-]{4,})/i);if(no)ex.push('受注No.'+no[1]);
@@ -561,7 +571,7 @@ function parseOrderText(raw){
 
 function openOcrDialog(onApply){
  let photo=null,busy=false;const touched=new Set();
- const FIELDS=[['customer','顧客名','c3'],['pname','製品名','c3'],['pmodel','型番','c3'],['qty','数量','c3'],['orderDate','注文日','c3'],['dueDate','納期','c3']];
+ const FIELDS=[['customer','顧客名','c3'],['process','加工区分','c3'],['pmodel','型番','c3'],['qty','数量','c3'],['orderDate','注文日','c3'],['dueDate','納期','c3']];
  const w=openModal(`<div class="mhead"><h2>写真から自動入力</h2><span class="sp"></span><button class="icon-btn" data-close aria-label="閉じる">${I('x')}</button></div>
  <form class="mbody" autocomplete="off" onsubmit="return false">
   <div class="btnrow"><button type="button" class="btn primary" data-o="cam">${I('camera')}注文書を撮影</button><button type="button" class="btn" data-o="lib">${I('image')}写真を選ぶ</button></div>
@@ -571,21 +581,22 @@ function openOcrDialog(onApply){
    <ol class="steps"><li>「写真」アプリで注文書の写真を開く</li><li>文字を長押し →「すべてを選択」→「コピー」</li><li>上の欄を長押しして「ペースト」</li></ol>
    <p class="hint">上の欄を長押しして「テキストをスキャン」を選ぶと、カメラを向けるだけで直接読み取ることもできます。</p></details>
   <h3 class="sub">入力される内容 <small style="font-weight:500;color:var(--muted)">（違っていたら直してください）</small></h3>
-  <div class="grid">${FIELDS.map(([n,l,c])=>`<label class="f ${c}" data-fld="${n}"><span>${l}</span><input name="${n}" ${/Date/.test(n)?'type="date"':n==='qty'?'type="number" inputmode="numeric"':''}></label>`).join('')}
+  <div class="grid">${FIELDS.map(([n,l,c])=>n==='process'?`<div class="f ${c}" data-fld="process"><span>${l} <small>複数選択できます</small></span><button type="button" class="proc-btn" data-o="proc">${procBtnHTML([])}</button></div>`:`<label class="f ${c}" data-fld="${n}"><span>${l}</span><input name="${n}" ${/Date/.test(n)?'type="date"':n==='qty'?'type="number" inputmode="numeric"':''}></label>`).join('')}
    <label class="f c6" data-fld="extra"><span>備考に入れる内容 <small>受注No.・注文番号・ライニング・寸法など</small></span><input name="extra"></label>
    <label class="f c6 urgent-toggle"><input type="checkbox" name="urgent"><span class="box">${I('flag')}急ぎの品</span></label></div>
   <div class="matchinfo"></div>
   <div class="ocr-opts"><label class="chk"><input type="checkbox" name="attach" checked>写真を備考に添付する</label><label class="chk"><input type="checkbox" name="appendText">読み取った文字を備考に追記する</label></div>
  </form>
  <div class="mfoot"><span class="sp"></span><button class="btn" data-close>キャンセル</button><button class="btn primary" data-o="apply">${I('check')}この内容で入力</button></div>`,{wide:true,sticky:true});
- const form=$('form',w),F=n=>form.elements.namedItem(n),ta=F('ocrText');
+ const form=$('form',w),F=n=>form.elements.namedItem(n),ta=F('ocrText');let proc=[];
+ const setProc=list=>{proc=list;$('[data-o=proc]',w).innerHTML=procBtnHTML(list);$('[data-fld=process]',w).classList.toggle('got',!!list.length&&!touched.has('process'))};
  const update=()=>{
-  const r=parseOrderText(ta.value);const map={customer:r.customer,pname:r.name,pmodel:r.model,qty:r.qty,orderDate:r.orderDate,dueDate:r.dueDate,extra:r.extra};
+  const r=parseOrderText(ta.value);if(!touched.has('process'))setProc(r.process||[]);const map={customer:r.customer,pmodel:r.model,qty:r.qty,orderDate:r.orderDate,dueDate:r.dueDate,extra:r.extra};
   for(const[n,v]of Object.entries(map)){if(touched.has(n))continue;F(n).value=v||'';$(`[data-fld="${n}"]`,w).classList.toggle('got',!!v)}
   const dl=$('[data-fld="dueDate"] > span',w);if(!touched.has('dueDate'))dl.innerHTML=r.dueGuessed?'納期 <em>月が読めなかったため推定しました。確認してください</em>':'納期';$('[data-fld="dueDate"]',w).classList.toggle('guess',!!r.dueGuessed&&!touched.has('dueDate'));
   if(!touched.has('urgent'))F('urgent').checked=!!r.urgent;
   const p=prodById(r.productId);const mi=$('.matchinfo',w);
-  mi.innerHTML=!ta.value.trim()?'':p?`<span class="ok">${I('check')} 登録済みの製品「${esc(p.name||'')}${p.model?' / '+esc(p.model):''}」と一致しました。図面も自動で入ります。</span>`:(F('pname').value||F('pmodel').value)?'<span class="nw">登録済みの製品とは一致しませんでした。新しい製品として登録されます。</span>':'';
+  mi.innerHTML=!ta.value.trim()?'':p?`<span class="ok">${I('check')} 登録済みの製品「${esc(p.model||pTitle(p))}」と一致しました。図面も自動で入ります。</span>`:F('pmodel').value?'<span class="nw">登録済みの製品とは一致しませんでした。新しい製品として登録されます。</span>':'';
  };
  let tmr;ta.addEventListener('input',()=>{clearTimeout(tmr);tmr=setTimeout(update,250)});
  form.addEventListener('input',e=>{const n=e.target.name;if(n&&n!=='ocrText'&&n!=='attach'&&n!=='appendText'){touched.add(n);const f=e.target.closest('[data-fld]');if(f)f.classList.remove('got')}});
@@ -605,9 +616,10 @@ function openOcrDialog(onApply){
  w.addEventListener('click',async e=>{
   const el=e.target.closest('[data-o]');if(!el)return;const o=el.dataset.o;
   if(o==='cam'||o==='lib')read(o==='cam');
+  else if(o==='proc')openProcessPicker(proc,list=>{touched.add('process');setProc(list)});
   else if(o==='apply'){
    if(busy){toast('読み取りが終わるまでお待ちください');return}
-   const r={customer:F('customer').value.trim(),name:F('pname').value.trim(),model:F('pmodel').value.trim(),qty:F('qty').value.trim(),orderDate:F('orderDate').value,dueDate:F('dueDate').value,urgent:F('urgent').checked};
+   const r={customer:F('customer').value.trim(),process:proc,model:F('pmodel').value.trim(),qty:F('qty').value.trim(),orderDate:F('orderDate').value,dueDate:F('dueDate').value,urgent:F('urgent').checked};
    if(F('attach').checked&&photo){const b=await compress(photo,1600,.82);r.photoId=(await storeFile(b,photo.name||'注文書.jpg')).id}
    const nt=[F('extra').value.trim(),F('appendText').checked?ta.value.trim():''].filter(Boolean).join('\n');if(nt)r.noteText=nt;
    delete w.dataset.sticky;closeModal(w);onApply(r);
@@ -615,6 +627,23 @@ function openOcrDialog(onApply){
  });
  return w;
 }
+
+/* ---- 加工区分（複数選択） ---- */
+const PROCESSES=['接着','張替','リベット'];
+const PROC_RE={'接着':/接着/,'張替':/(張替|張り替|貼替|貼り替|張換|張り換)/,'リベット':/リベット/};
+const procTags=list=>(list||[]).map(x=>`<span class="ptag">${esc(x)}</span>`).join('');
+const procBtnHTML=list=>`${(list&&list.length)?procTags(list):'<span class="ph-t">タップして選択</span>'}${I('down')}`;
+function openProcessPicker(current,onChange){
+ const sel=new Set(current||[]);
+ const w=openModal(`<div class="mhead"><h2>加工区分</h2><span class="sp"></span><button class="icon-btn" data-close aria-label="閉じる">${I('x')}</button></div>
+ <div class="mbody"><p class="hint" style="margin:0 0 12px">当てはまるものをすべて選んでください（複数可）</p><div class="proc-list">${PROCESSES.map(k=>`<label class="proc-opt"><input type="checkbox" value="${esc(k)}" ${sel.has(k)?'checked':''}>${esc(k)}</label>`).join('')}</div></div>
+ <div class="mfoot"><button class="btn" data-clear>すべて外す</button><span class="sp"></span><button class="btn primary" data-close>${I('check')}決定</button></div>`);
+ const emit=()=>onChange(PROCESSES.filter(k=>sel.has(k)));
+ w.addEventListener('change',e=>{const c=e.target;if(c.type!=='checkbox')return;c.checked?sel.add(c.value):sel.delete(c.value);emit()});
+ w.addEventListener('click',e=>{if(e.target.closest('[data-clear]')){sel.clear();$$('input',w).forEach(i=>i.checked=false);emit()}});
+ return w;
+}
+const pTitle=p=>p?(p.name||p.model||'（名称なし）'):'';
 
 /* ========== 1. 注文 ========== */
 function groupOf(o){const d=daysLeft(o.dueDate);if(d===null)return'納期未設定';if(d<0)return'期限切れ';if(d===0)return'今日';if(d===1)return'明日';if(d<=7)return'1週間以内';return'それ以降'}
@@ -631,7 +660,7 @@ function orderCard(o){
   ${dueBlock(o)}
   <div class="ob">
    <div class="r1">${o.urgent&&!o.done?`<span class="badge urgent">${I('flag')}急ぎ</span>`:''}${o.done?`<span class="badge done">${I('check')}完了</span>`:''}<span class="cust">${esc(o.customer||'（顧客名なし）')}</span></div>
-   <div class="prod">${esc(o.name||'（製品名なし）')}${o.model?`<span class="model">${esc(o.model)}</span>`:''}${o.qty!==''&&o.qty!=null?`<span class="qty">× ${esc(o.qty)}</span>`:''}</div>
+   <div class="prod">${(o.process&&o.process.length)?procTags(o.process):o.name?esc(o.name):''}${o.model?`<span class="model" style="${(o.process&&o.process.length)||o.name?'':'margin-left:0'}">${esc(o.model)}</span>`:'<span class="cust">（型番なし）</span>'}${o.qty!==''&&o.qty!=null?`<span class="qty">× ${esc(o.qty)}</span>`:''}</div>
    <div class="meta"><span>注文日 ${fmtFull(o.orderDate)}</span><span>前回 ${o.prevOrderDate?fmtFull(o.prevOrderDate):'なし'}</span></div>
    ${o.note?`<div class="note">${esc(o.note.split('\n')[0])}</div>`:''}
   </div>
@@ -648,7 +677,7 @@ function renderOrders(){
  $('#view').innerHTML=`<div class="toolbar">
   <div class="seg" id="oseg">${[['open','未完了'],['done','完了'],['all','すべて']].map(([v,l])=>`<button data-action="ofilter" data-v="${v}" class="${state.orderFilter===v?'on':''}">${l}</button>`).join('')}</div>
   <label class="chk"><input type="checkbox" id="urgentTop" ${state.urgentTop?'checked':''}>急ぎを先頭に</label>
-  <input class="search-in" id="orderText" type="search" placeholder="顧客名・製品名・型番で絞り込み" value="${esc(state.orderText)}">
+  <input class="search-in" id="orderText" type="search" placeholder="顧客名・型番・加工区分で絞り込み" value="${esc(state.orderText)}">
  </div><div id="orderStats"></div><div id="orderList"></div>`;
  $('#urgentTop').onchange=e=>{state.urgentTop=e.target.checked;savePrefs();renderOrderList()};
  $('#orderText').oninput=e=>{state.orderText=e.target.value;renderOrderList()};
@@ -659,7 +688,7 @@ function renderOrderList(){
  const over=open.filter(o=>{const d=daysLeft(o.dueDate);return d!==null&&d<0}).length,td=open.filter(o=>daysLeft(o.dueDate)===0).length,ur=open.filter(o=>o.urgent).length;
  $('#orderStats').innerHTML=`<div class="stats"><span class="stat">未完了 <b>${open.length}</b></span>${over?`<span class="stat red">期限切れ <b>${over}</b></span>`:''}${td?`<span class="stat amber">今日納期 <b>${td}</b></span>`:''}${ur?`<span class="stat red">急ぎ <b>${ur}</b></span>`:''}</div>`;
  let list=state.orders.filter(o=>state.orderFilter==='all'||(state.orderFilter==='done'?o.done:!o.done));
- const t=norm(state.orderText);if(t)list=list.filter(o=>norm([o.customer,o.name,o.model,o.note].join(' ')).includes(t)||spokenAlpha(t)!==t&&norm([o.model].join('')).includes(spokenAlpha(t)));
+ const t=norm(state.orderText);if(t)list=list.filter(o=>norm([o.customer,o.name,o.model,o.note,(o.process||[]).join(' ')].join(' ')).includes(t)||spokenAlpha(t)!==t&&norm([o.model].join('')).includes(spokenAlpha(t)));
  const key=o=>o.dueDate||'9999-12-31';
  list.sort((a,b)=>(state.urgentTop?(+!!b.urgent)-(+!!a.urgent):0)||key(a).localeCompare(key(b))||(+!!b.urgent)-(+!!a.urgent)||(a.createdAt||0)-(b.createdAt||0));
  if(!list.length){$('#orderList').innerHTML=`<div class="empty-state">${I('list')}<div>${state.orders.length?'該当する注文はありません':'まだ注文がありません。右上の「注文を登録」から追加してください。'}</div></div>`;return}
@@ -671,18 +700,18 @@ function renderOrderList(){
 
 function openOrderForm(order,preset={}){
  const isNew=!order;
- const o=order?clone(order):{id:uid(),customer:'',productId:null,name:'',model:'',qty:'',orderDate:today(),dueDate:'',prevOrderDate:'',urgent:false,note:'',photos:[],done:false,createdAt:Date.now()};
+ const o=order?clone(order):{id:uid(),customer:'',productId:null,name:'',process:[],model:'',qty:'',orderDate:today(),dueDate:'',prevOrderDate:'',urgent:false,note:'',photos:[],done:false,createdAt:Date.now()};
  let p=prodById(o.productId);
- if(preset.productId){p=prodById(preset.productId);if(p){o.productId=p.id;o.name=p.name;o.model=p.model}}
+ if(preset.productId){p=prodById(preset.productId);if(p){o.productId=p.id;o.model=p.model}}
  if(isNew&&p&&!o.prevOrderDate)o.prevOrderDate=prevOrderOf(p.id,o.id,o.orderDate,o.createdAt);
- const D={prodId:p?p.id:null,drawings:p?clone(p.drawings||[]):[],ironUrl:p?p.ironUrl||'':'',liningUrl:p?p.liningUrl||'':'',photos:[...(o.photos||[])],newPhotos:[],prevAuto:isNew||!o.prevOrderDate};
+ const D={prodId:p?p.id:null,drawings:p?clone(p.drawings||[]):[],ironUrl:p?p.ironUrl||'':'',liningUrl:p?p.liningUrl||'':'',photos:[...(o.photos||[])],newPhotos:[],prevAuto:isNew||!o.prevOrderDate,process:[...(o.process||[])]};
  const w=openModal(`<div class="mhead"><h2>${isNew?'注文を登録':'注文を編集'}</h2><span class="sp"></span><button class="icon-btn" data-close aria-label="閉じる">${I('x')}</button></div>
  <form class="mbody" autocomplete="off" onsubmit="return false">
-  <div class="ocr-cta"><button type="button" class="btn primary" data-act="ocr">${I('camera')}写真から自動入力</button><span>注文書やFAXを撮ると、顧客名・製品・数量・納期などを読み取って入力します</span></div>
+  <div class="ocr-cta"><button type="button" class="btn primary" data-act="ocr">${I('camera')}写真から自動入力</button><span>注文書やFAXを撮ると、顧客名・型番・加工区分・数量・納期などを読み取って入力します</span></div>
   <div class="grid">
    <label class="f c4"><span>顧客名</span><input name="customer" list="dlCust" value="${esc(o.customer)}"></label>
    <label class="f c2 urgent-toggle"><input type="checkbox" name="urgent" ${o.urgent?'checked':''}><span class="box">${I('flag')}急ぎの品</span></label>
-   <label class="f c3"><span>製品名</span><input name="pname" list="dlName" value="${esc(o.name)}"></label>
+   <div class="f c3" data-fld="process"><span>加工区分 <small>複数選択できます</small></span><button type="button" class="proc-btn" data-act="proc">${procBtnHTML(D.process)}</button></div>
    <label class="f c3"><span>型番</span><input name="pmodel" list="dlModel" autocapitalize="characters" value="${esc(o.model)}"></label>
    <label class="f c2"><span>数量</span><input name="qty" type="number" inputmode="numeric" min="0" value="${esc(o.qty)}"></label>
    <label class="f c2"><span>注文日</span><input name="orderDate" type="date" value="${esc(o.orderDate)}"></label>
@@ -704,28 +733,29 @@ function openOrderForm(order,preset={}){
  const refreshDraw=()=>{$('#drawArea',w).innerHTML=drawingAreaHTML(D);hydrate(w)};
  const refreshPhotos=()=>{$('#notePhotos',w).innerHTML=photoThumbs(D.photos);hydrate(w)};
  const refreshLink=()=>{const li=$('#linkInfo',w);const pp=prodById(D.prodId);
-  if(pp){const n=ordersOf(pp.id).filter(x=>x.id!==o.id).length;li.className='linkinfo';li.innerHTML=`登録済みの製品 <b>${esc(pp.name||'')}${pp.model?' / '+esc(pp.model):''}</b>　過去の注文 ${n}件`}
-  else if(F('pname').value.trim()||F('pmodel').value.trim()){li.className='linkinfo new';li.textContent='新しい製品です。保存すると製品管理にも自動で登録されます。'}
-  else{li.className='linkinfo';li.textContent='製品名か型番を入力すると、登録済みの製品と図面を呼び出します。'}
+  if(pp){const n=ordersOf(pp.id).filter(x=>x.id!==o.id).length;li.className='linkinfo';li.innerHTML=`登録済みの製品 <b>${esc(pp.model||'')}${pp.name&&pp.model?' / '+esc(pp.name):pp.model?'':esc(pp.name||'')}</b>　過去の注文 ${n}件`}
+  else if(F('pmodel').value.trim()){li.className='linkinfo new';li.textContent='新しい製品です。保存すると製品管理にも自動で登録されます。'}
+  else{li.className='linkinfo';li.textContent='型番を入力すると、登録済みの製品と図面を呼び出します。'}
   $('#prevHint',w).textContent=D.prevAuto&&F('prevOrderDate').value?'自動入力':'';
  };
  const relink=()=>{
-  const name=F('pname').value.trim(),model=F('pmodel').value.trim();const np=findProductBy(name,model);
+  const model=F('pmodel').value.trim();const np=findProductBy(model?'':o.name,model);
   if((np?np.id:null)!==D.prodId){
-   if(np){D.prodId=np.id;D.drawings=clone(np.drawings||[]);D.ironUrl=np.ironUrl||'';D.liningUrl=np.liningUrl||'';if(!name)F('pname').value=np.name||'';if(!model)F('pmodel').value=np.model||''}
+   if(np){D.prodId=np.id;D.drawings=clone(np.drawings||[]);D.ironUrl=np.ironUrl||'';D.liningUrl=np.liningUrl||'';if(!model)F('pmodel').value=np.model||''}
    else{if(D.prodId){D.drawings=[];D.ironUrl='';D.liningUrl=''}D.prodId=null}
    refreshDraw();
   }
   if(D.prevAuto)F('prevOrderDate').value=D.prodId?prevOrderOf(D.prodId,o.id,F('orderDate').value||today(),o.createdAt):'';
   refreshLink();
  };
- F('pname').addEventListener('change',relink);F('pmodel').addEventListener('change',relink);F('orderDate').addEventListener('change',relink);
+ F('pmodel').addEventListener('change',relink);F('orderDate').addEventListener('change',relink);
  F('prevOrderDate').addEventListener('input',()=>{D.prevAuto=false;refreshLink()});
  form.addEventListener('input',e=>{if(e.target.name==='ironUrl'||e.target.name==='liningUrl')D[e.target.name]=e.target.value});
  refreshDraw();refreshPhotos();refreshLink();
+ const setProc=list=>{D.process=list;$('[data-act=proc]',w).innerHTML=procBtnHTML(list)};
  const applyOcr=r=>{
   const set=(n,v)=>{if(v)F(n).value=v};
-  set('customer',r.customer);set('pname',r.name);set('pmodel',r.model);set('qty',r.qty);set('orderDate',r.orderDate);set('dueDate',r.dueDate);
+  set('customer',r.customer);if(r.process&&r.process.length)setProc(r.process);set('pmodel',r.model);set('qty',r.qty);set('orderDate',r.orderDate);set('dueDate',r.dueDate);
   if(r.urgent)F('urgent').checked=true;
   if(r.photoId){D.photos.push(r.photoId);D.newPhotos.push(r.photoId);refreshPhotos()}
   if(r.noteText)F('note').value=(F('note').value?F('note').value+'\n':'')+r.noteText;
@@ -737,22 +767,23 @@ function openOrderForm(order,preset={}){
   const el=e.target.closest('[data-act]');if(!el)return;const act=el.dataset.act;e.stopPropagation();
   if(await handleDrawingAct(act,el,D,refreshDraw))return;
   if(act==='ocr')openOcrDialog(applyOcr);
+  else if(act==='proc')openProcessPicker(D.process,setProc);
   else if(act==='p-cam'||act==='p-lib'){const ids=await addPhotos(act==='p-cam');if(ids.length){D.photos.push(...ids);D.newPhotos.push(...ids);refreshPhotos();toast(`写真を${ids.length}枚追加しました`)}}
   else if(act==='p-del'){if(confirm('この写真を備考から外しますか？')){D.photos.splice(+el.dataset.i,1);refreshPhotos()}}
   else if(act==='p-open')openViewer(D.photos,+el.dataset.i);
   else if(act==='delete'){if(!confirm('この注文を削除しますか？（元に戻せません）'))return;await DB.del('orders',o.id);state.orders=state.orders.filter(x=>x.id!==o.id);closeModal(w);refreshDatalists();render();toast('注文を削除しました');gcFiles()}
   else if(act==='save'){
-   const v=n=>(F(n).value||'').trim();const name=v('pname'),model=v('pmodel');
-   if(!name&&!model){alert('製品名か型番を入力してください');F('pname').focus();return}
+   const v=n=>(F(n).value||'').trim();const model=v('pmodel'),name=model?'':(o.name||'');
+   if(!model&&!name){alert('型番を入力してください');F('pmodel').focus();return}
    if(!v('dueDate')){alert('納期を入力してください');F('dueDate').focus();return}
    const now=Date.now();let pp=prodById(D.prodId)||findProductBy(name,model);
-   if(!pp){pp={id:uid(),name,model,drawings:[],ironUrl:'',liningUrl:'',photos:[],createdAt:now};state.products.push(pp)}
-   else{if(!pp.name&&name)pp.name=name;if(!pp.model&&model)pp.model=model}
+   if(!pp){pp={id:uid(),name:'',model,drawings:[],ironUrl:'',liningUrl:'',photos:[],createdAt:now};state.products.push(pp)}
+   else{if(!pp.model&&model)pp.model=model}
    const fixModel=pp.model&&norm(pp.model)===norm(model)?pp.model:model;
    pp.drawings=D.drawings;pp.ironUrl=(D.ironUrl||'').trim();pp.liningUrl=(D.liningUrl||'').trim();pp.photos=pp.photos||[];
    for(const id of D.newPhotos)if(D.photos.includes(id)&&!pp.photos.includes(id))pp.photos.push(id);
    pp.updatedAt=now;await DB.put('products',pp);
-   Object.assign(o,{customer:v('customer'),productId:pp.id,name,model:fixModel,qty:v('qty'),orderDate:v('orderDate'),dueDate:v('dueDate'),prevOrderDate:v('prevOrderDate'),urgent:F('urgent').checked,note:F('note').value.trim(),photos:D.photos,done:F('done')?F('done').checked:o.done,updatedAt:now});
+   Object.assign(o,{customer:v('customer'),productId:pp.id,name:o.name||'',process:D.process,model:fixModel,qty:v('qty'),orderDate:v('orderDate'),dueDate:v('dueDate'),prevOrderDate:v('prevOrderDate'),urgent:F('urgent').checked,note:F('note').value.trim(),photos:D.photos,done:F('done')?F('done').checked:o.done,updatedAt:now});
    await DB.put('orders',o);upsert(state.orders,o);
    delete w.dataset.sticky;closeModal(w);refreshDatalists();render();toast(isNew?'注文を登録しました':'保存しました');gcFiles();
   }
@@ -772,11 +803,11 @@ function renderProducts(){
 function renderProdList(){
  const t=norm(state.prodText),ta=spokenAlpha(t);
  let list=state.products.filter(p=>{if(!t)return true;const s=norm(p.name+' '+p.model);return s.includes(t)||s.includes(ta)});
- list.sort((a,b)=>(a.name||'').localeCompare(b.name||'','ja')||(a.model||'').localeCompare(b.model||'','ja'));
+ list.sort((a,b)=>pTitle(a).localeCompare(pTitle(b),'ja'));
  if(!list.length){$('#prodList').innerHTML=`<div class="empty-state">${I('box')}<div>${state.products.length?'該当する製品はありません':'まだ製品がありません。「製品を登録」か、注文の登録で自動的に追加されます。'}</div></div>`;return}
  $('#prodList').innerHTML=`<div class="pgrid">${list.map(p=>{const ni=(p.drawings||[]).filter(d=>d.kind==='iron').length,nl=(p.drawings||[]).filter(d=>d.kind==='lining').length,last=prevOrderOf(p.id,null,null);
   return `<div class="pcard" data-action="edit-product" data-id="${p.id}"><div class="thumb">${productThumb(p)}</div><div style="min-width:0">
-   <div class="pname">${esc(p.name||'（製品名なし）')}</div>${p.model?`<div class="pmodel"><span class="model">${esc(p.model)}</span></div>`:''}
+   <div class="pname">${esc(pTitle(p))}</div>${p.model&&p.name?`<div class="pmodel"><span class="model">${esc(p.model)}</span></div>`:''}
    <div class="pmeta">鉄心 ${ni} ・ ライニング ${nl} ・ 写真 ${(p.photos||[]).length}${last?` ・ 前回注文 ${fmtFull(last)}`:''}</div>
    <div class="pact"><button class="btn sm" data-action="quick-photo" data-id="${p.id}">${I('camera')}撮影して登録</button><button class="btn sm" data-action="new-order-for" data-id="${p.id}">${I('plus')}注文</button></div>
   </div></div>`}).join('')}</div>`;
@@ -797,7 +828,7 @@ function openProductForm(prod){
   <section class="fs"><h3>図面</h3><div id="drawArea"></div></section>
   <section class="fs"><h3>写真 <small>撮影するとその場で自動保存されます</small></h3><div class="photos" id="prodPhotos"></div>
    <div class="btnrow"><button type="button" class="btn primary" data-act="p-cam">${I('camera')}撮影して登録</button><button type="button" class="btn" data-act="p-lib">${I('image')}写真を選ぶ</button></div></section>
-  ${hist.length?`<section class="fs"><h3>注文履歴 <small>${hist.length}件</small></h3><table class="hist"><tr><th>注文日</th><th>顧客</th><th>数量</th><th>納期</th><th></th></tr>${hist.slice(0,30).map(o=>`<tr><td>${fmtFull(o.orderDate)}</td><td>${esc(o.customer)}</td><td>${esc(o.qty)}</td><td>${fmtFull(o.dueDate)}</td><td>${o.done?'完了':'<b style="color:var(--urgent)">進行中</b>'}</td></tr>`).join('')}</table></section>`:''}
+  ${hist.length?`<section class="fs"><h3>注文履歴 <small>${hist.length}件</small></h3><table class="hist"><tr><th>注文日</th><th>顧客</th><th>加工区分</th><th>数量</th><th>納期</th><th></th></tr>${hist.slice(0,30).map(o=>`<tr><td>${fmtFull(o.orderDate)}</td><td>${esc(o.customer)}</td><td>${esc((o.process||[]).join('・')||o.name||'')}</td><td>${esc(o.qty)}</td><td>${fmtFull(o.dueDate)}</td><td>${o.done?'完了':'<b style="color:var(--urgent)">進行中</b>'}</td></tr>`).join('')}</table></section>`:''}
  </form>
  <div class="mfoot">${isNew?'':`<button class="btn danger" data-act="delete">${I('trash')}削除</button>`}<span class="sp"></span><button class="btn" data-close>閉じる</button><button class="btn primary" data-act="save">${I('check')}保存</button></div>`,{wide:true,sticky:true});
  const form=$('form',w),F=n=>form.elements.namedItem(n);
@@ -856,7 +887,7 @@ function resultCard(p){
  const os=ordersOf(p.id),last=os[0],act=os.filter(o=>!o.done).sort((a,b)=>(a.dueDate||'9').localeCompare(b.dueDate||'9'));
  const ni=(p.drawings||[]).filter(d=>d.kind==='iron').length+(p.ironUrl?1:0),nl=(p.drawings||[]).filter(d=>d.kind==='lining').length+(p.liningUrl?1:0),np=(p.photos||[]).length;
  return `<div class="rcard"><div class="thumb">${productThumb(p)}</div><div style="min-width:0">
-  <div class="pname">${esc(p.name||'（製品名なし）')}</div>${p.model?`<div class="pmodel"><span class="model">${esc(p.model)}</span></div>`:''}
+  <div class="pname">${esc(pTitle(p))}</div>${p.model&&p.name?`<div class="pmodel"><span class="model">${esc(p.model)}</span></div>`:''}
   <div class="rmeta">${last?`前回注文 ${fmtFull(last.orderDate)}（${esc(last.customer||'—')}・${esc(last.qty)}個）・ 注文 ${os.length}回`:'注文履歴なし'}${act.length?` ・ <span class="act">進行中 ${act.length}件（納期 ${fmtMD(act[0].dueDate)}）</span>`:''}</div>
   <div class="rbtns"><button class="btn sm" data-action="open-drawing" data-pid="${p.id}" data-kind="iron" ${ni?'':'disabled'}>${I('doc')}鉄心図面 ${ni||''}</button>
    <button class="btn sm" data-action="open-drawing" data-pid="${p.id}" data-kind="lining" ${nl?'':'disabled'}>${I('doc')}ライニング図面 ${nl||''}</button>
@@ -925,7 +956,7 @@ async function renderSettings(){
   <li>「写真から登録」で注文書を撮ると、顧客名・製品・数量・納期を読み取ります。登録済みの型番が写っていれば、製品と図面も自動で呼び出します。</li>
   <li>製品一覧の「撮影して登録」で、撮った写真がその製品にすぐ保存されます。</li>
   <li>音声ボタンが使えない場合は、キーボードのマイクボタンで話すと入力できます。</li></ul></div>
- <p class="hint" style="text-align:center">受注・製品管理 v1.2</p>`;
+ <p class="hint" style="text-align:center">受注・製品管理 v1.3</p>`;
  $('#ownName').onchange=e=>{try{localStorage.setItem('kanri-own',e.target.value.trim())}catch(err){}toast('自社名を保存しました')};
  showOcrState();
  try{if(navigator.storage&&navigator.storage.estimate){const e=await navigator.storage.estimate();$('#usage').textContent=(e.usage/1048576).toFixed(1)+' MB'}}catch(e){}
