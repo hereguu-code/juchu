@@ -1,9 +1,9 @@
 // オフライン用キャッシュ。アプリを更新したら VERSION を変える
-const VERSION = 'kanri-v2';
+const VERSION = 'kanri-v3';
 // 文字読み取り用の大きなファイルは別に保管（アプリ更新のたびに再ダウンロードしない）
-const OCR_CACHE = 'kanri-ocr-v1';
+const OCR_CACHE = 'kanri-ocr-v2';
 const ASSETS = ['./', './index.html', './manifest.webmanifest', './icon-192.png', './icon-512.png', './apple-touch-icon.png'];
-const OCR_FILES = ['ocr/tesseract.min.js', 'ocr/worker.min.js', 'ocr/tesseract-core-simd-lstm.wasm.js', 'ocr/tesseract-core-lstm.wasm.js', 'ocr/tesseract-core-relaxedsimd-lstm.wasm.js', 'ocr/jpn.traineddata.gz'];
+const OCR_FILES = ['ocr2/ort.wasm.min.js', 'ocr2/ppocr.js', 'ocr2/ort-wasm-simd-threaded.mjs', 'ocr2/ort-wasm-simd-threaded.wasm', 'ocr2/det.ort', 'ocr2/rec.onnx', 'ocr2/dict.txt'];
 
 self.addEventListener('install', e => {
   e.waitUntil((async () => {
@@ -31,7 +31,7 @@ self.addEventListener('fetch', e => {
   if (url.origin !== location.origin) return;
 
   // 読み取り用ファイル：キャッシュ優先（無ければ取得して保存）
-  if (url.pathname.includes('/ocr/')) {
+  if (url.pathname.includes('/ocr2/')) {
     e.respondWith((async () => {
       const c = await caches.open(OCR_CACHE);
       const hit = await c.match(req, { ignoreSearch: true });

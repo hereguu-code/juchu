@@ -238,6 +238,8 @@ body[data-tab=search] main{padding-bottom:calc(var(--tabh) + env(safe-area-inset
 .tip summary{cursor:pointer;color:var(--accent);font-weight:600;padding:6px 0}
 h3.sub{margin:22px 0 10px;font-size:15px}
 .f.got input{background:var(--ok-bg);border-color:transparent}
+.f.guess input{background:var(--warn-bg);outline:2px solid var(--warn);outline-offset:-2px}
+.f>span em{font-weight:600}
 .matchinfo{margin:10px 0 4px;font-size:14px}
 .matchinfo .ok{color:var(--ok);font-weight:700}
 .matchinfo .nw{color:var(--accent);font-weight:600}
@@ -428,46 +430,22 @@ async function handleDrawingAct(act,el,D,refresh){
 }
 
 /* ========== 写真から文字を読み取る（iPad内で処理・ネット不要） ========== */
-const OCR_FILES=['ocr/tesseract.min.js','ocr/worker.min.js','ocr/tesseract-core-simd-lstm.wasm.js','ocr/tesseract-core-lstm.wasm.js','ocr/tesseract-core-relaxedsimd-lstm.wasm.js','ocr/jpn.traineddata.gz'];
-let ocrWorker=null,ocrIdle=null,ocrProg=()=>{};
-const loadScript=src=>new Promise((res,rej)=>{if(window.Tesseract)return res();const s=document.createElement('script');s.src=src;s.onload=res;s.onerror=()=>rej(new Error('読み取り機能を読み込めませんでした（初回はネット接続が必要です）'));document.head.appendChild(s)});
-async function getOcrWorker(){
- if(ocrWorker)return ocrWorker;
- await loadScript('ocr/tesseract.min.js');
- const base=new URL('ocr/',location.href).href;
- ocrWorker=await Tesseract.createWorker('jpn',1,{workerPath:base+'worker.min.js',corePath:base,langPath:base,gzip:true,workerBlobURL:false,logger:m=>ocrProg(m)});
- return ocrWorker;
-}
-const loadImage=src=>new Promise((res,rej)=>{const i=new Image();i.onload=()=>res(i);i.onerror=()=>rej(new Error('画像を開けませんでした'));i.src=src});
-async function prepForOcr(blob){
- const u=URL.createObjectURL(blob);const img=await loadImage(u);URL.revokeObjectURL(u);
- let w=img.naturalWidth,h=img.naturalHeight;const L=Math.max(w,h);const s=L>2600?2600/L:L<1400?1400/L:1;w=Math.round(w*s);h=Math.round(h*s);
- const c=document.createElement('canvas');c.width=w;c.height=h;const g=c.getContext('2d');g.drawImage(img,0,0,w,h);
- // グレー化＋コントラスト補正（影や紙の黄ばみを軽減）
- const d=g.getImageData(0,0,w,h),p=d.data,hist=new Uint32Array(256);
- for(let i=0;i<p.length;i+=4){const y=(p[i]*299+p[i+1]*587+p[i+2]*114)/1000|0;p[i]=y;hist[y]++}
- const n=w*h;let lo=0,hi=255,acc=0;for(;lo<255;lo++){acc+=hist[lo];if(acc>n*.01)break}acc=0;for(;hi>0;hi--){acc+=hist[hi];if(acc>n*.02)break}
- const sc=255/Math.max(1,hi-lo);for(let i=0;i<p.length;i+=4){const v=Math.max(0,Math.min(255,(p[i]-lo)*sc));p[i]=p[i+1]=p[i+2]=v}
- // 表の罫線を消す（罫線があると表の中の文字を読み飛ばしやすいため）
- const dark=new Uint8Array(n);for(let i=0,j=0;j<n;i+=4,j++)dark[j]=p[i]<140?1:0;
- const kill=new Uint8Array(n),minH=Math.round(w*.12),minV=Math.round(Math.max(w,h)*.045);
- for(let y=0;y<h;y++){let x=0;while(x<w){if(!dark[y*w+x]){x++;continue}let e=x;while(e<w&&dark[y*w+e])e++;if(e-x>=minH)for(let k=x;k<e;k++)kill[y*w+k]=1;x=e}}
- for(let x=0;x<w;x++){let y=0;while(y<h){if(!dark[y*w+x]){y++;continue}let e=y;while(e<h&&dark[e*w+x])e++;if(e-y>=minV)for(let k=y;k<e;k++)kill[k*w+x]=1;y=e}}
- for(let j=0,i=0;j<n;j++,i+=4)if(kill[j])p[i]=p[i+1]=p[i+2]=255;
- g.putImageData(d,0,0);return c;
-}
+const OCR_FILES=['ocr2/ort.wasm.min.js','ocr2/ppocr.js','ocr2/ort-wasm-simd-threaded.mjs','ocr2/ort-wasm-simd-threaded.wasm','ocr2/det.ort','ocr2/rec.onnx','ocr2/dict.txt'];
+const loadScript=src=>new Promise((res,rej)=>{if(document.querySelector(`script[data-src="${src}"]`))return res();const s=document.createElement('script');s.src=src;s.dataset.src=src;s.onload=res;s.onerror=()=>rej(new Error('読み取り機能を読み込めませんでした（初回はネット接続が必要です）'));document.head.appendChild(s)});
 async function runOcr(blob,onProg){
- ocrProg=onProg||(()=>{});clearTimeout(ocrIdle);
- const w=await getOcrWorker();const c=await prepForOcr(blob);const{data}=await w.recognize(c);
- ocrIdle=setTimeout(()=>{if(ocrWorker){ocrWorker.terminate();ocrWorker=null}},120000);
- return cleanOcr(data.text);
+ await loadScript('ocr2/ort.wasm.min.js');await loadScript('ocr2/ppocr.js');
+ const text=await window.PPOCR.read(blob,(t,p)=>onProg&&onProg(t,p));
+ return cleanOcr(text);
 }
 async function ocrReady(){if(!('caches' in window))return null;try{for(const f of OCR_FILES)if(!(await caches.match(new URL(f,location.href).href)))return false;return true}catch(e){return null}}
 
 /* ---- 読み取った文字から注文内容を取り出す ---- */
 const JCH='[\\u3040-\\u30ff\\u3400-\\u9fff\\uf900-\\ufaff々〆ー]';
+// 読み取りエンジンが中国の簡体字で返しやすい字を日本の字体に直す
+const SIMP2JA={'单':'単','铁':'鉄','计':'計','岛':'島','业':'業','发':'発','东':'東','张':'張','价':'価','额':'額','产':'産','场':'場','机':'機','电':'電','设':'設','线':'線','图':'図','书':'書','纸':'紙','购':'購','货':'貨','务':'務','员':'員','质':'質','检':'検','验':'験','长':'長','门':'門','关':'関','开':'開','应':'応','达':'達','运':'運','输':'輸','时':'時','间':'間','县':'県','卖':'売','买':'買','处':'処','号':'号','们':'們','个':'個','数':'数','转':'転','车':'車','轮':'輪','钢':'鋼','铸':'鋳','锻':'鍛','钉':'釘','螺':'螺','栓':'栓','规':'規','样':'様','纳':'納','页':'頁','实':'実','际':'際','销':'銷','营':'営','业':'業','乐':'楽','学':'学','会':'会','社':'社','区':'区','寿':'寿','滨':'浜','泽':'沢','边':'辺','广':'広','丰':'豊','荣':'栄','龙':'竜','齐':'斉','径':'径','号':'号','备':'備','注':'注','种':'種','类':'類','总':'総','这':'這','让':'譲','压':'圧','变':'変','涂':'塗','层':'層','厚':'厚','宽':'寛','钻':'鑽','铝':'アルミ','铜':'銅','锈':'錆','网':'網','动':'動','头':'頭','尔':'爾','万':'万','与':'与','为':'為','义':'義','几':'幾','对':'対','带':'帯','币':'幣','别':'別','剂':'剤','劳':'労','华':'華','协':'協','单':'単','卫':'衛','历':'歴','县':'県','后':'後','向':'向','听':'聴','园':'園','围':'囲','圆':'円','坏':'壊','块':'塊','坚':'堅','报':'報','填':'填','将':'将','尽':'尽','层':'層','岁':'歳','巩':'鞏','帐':'帳','庆':'慶','库':'庫','录':'録','彻':'徹','忆':'憶','态':'態','总':'総','战':'戦','扩':'拡','扫':'掃','护':'護','择':'択','换':'換','损':'損','摄':'摂','击':'撃','断':'断','无':'無','显':'顕','样':'様','树':'樹','桥':'橋','楼':'楼','残':'残','毕':'畢','气':'気','汇':'彙','况':'況','热':'熱','灯':'灯','点':'点','牵':'牽','状':'状','独':'独','环':'環','现':'現','疗':'療','监':'監','码':'碼','确':'確','离':'離','积':'積','称':'称','税':'税','稳':'穏','笔':'筆','简':'簡','级':'級','约':'約','纪':'紀','练':'練','组':'組','细':'細','终':'終','经':'経','结':'結','给':'給','统':'統','继':'継','续':'続','维':'維','综':'綜','缘':'縁','缩':'縮','罗':'羅','职':'職','联':'聯','肃':'粛','胜':'勝','节':'節','苏':'蘇','药':'薬','获':'獲','虑':'慮','补':'補','装':'装','见':'見','观':'観','规':'規','视':'視','览':'覧','订':'訂','认':'認','讨':'討','让':'譲','记':'記','讲':'講','许':'許','论':'論','证':'証','评':'評','识':'識','词':'詞','译':'訳','试':'試','话':'話','询':'詢','请':'請','读':'読','调':'調','谈':'談','负':'負','财':'財','责':'責','费':'費','资':'資','赏':'賞','车':'車','软':'軟','载':'載','辆':'両','边':'辺','过':'過','还':'還','进':'進','远':'遠','连':'連','选':'選','递':'逓','适':'適','邮':'郵','采':'採','释':'釈','钱':'銭','针':'針','错':'錯','镜':'鏡','闭':'閉','问':'問','闻':'聞','阀':'閥','队':'隊','阶':'階','阳':'陽','际':'際','陆':'陸','险':'険','随':'随','隐':'隠','难':'難','顺':'順','须':'須','顾':'顧','预':'預','领':'領','频':'頻','题':'題','额':'額','风':'風','飞':'飛','馆':'館','驱':'駆','验':'験','鱼':'魚','黄':'黄'};
+const fixChars=t=>t.replace(/[一-鿿]/g,c=>SIMP2JA[c]||c).replace(/エ業/g,'工業').replace(/エ場/g,'工場');
 function cleanOcr(t){
- t=String(t||'').normalize('NFKC').replace(/\r/g,'').replace(/[ \t]+/g,' ');
+ t=fixChars(String(t||'').normalize('NFKC')).replace(/\r/g,'').replace(/[ \t]+/g,' ');
  t=t.replace(new RegExp(`(${JCH}) (?=${JCH})`,'g'),'$1');
  return t.split('\n').map(s=>s.trim()).filter(Boolean).join('\n');
 }
@@ -490,13 +468,14 @@ const LBL={
  model:/(型番|型式|品番|図番|図面番号|部品番号|型名|MODEL|P\/N)/i,
  qty:/(数量|個数|員数|台数|本数|注文数|QTY)/i,
  due:/(希望納期|納入希望日|納入予定日|納入期日|納入日|納品日|納期)/,
- order:/(注文日|発注日|発行日|作成日|受付日|日付)/,
- cust:/(発注者|発注元|注文者|注文元|得意先|顧客名|顧客|お客様名|貴社名|御社名|会社名)/,
+ order:/(受注日|注文日|発注日|発行日|作成日|受付日|日付)/,
+ cust:/(客先|発注者|発注元|注文者|注文元|得意先|顧客名|顧客|お客様名|貴社名|御社名|会社名)/,
 };
-const ANY_LBL=new RegExp([LBL.name,LBL.model,LBL.qty,LBL.due,LBL.order,LBL.cust].map(r=>r.source).join('|')+'|単価|金額|備考|摘要|合計|TEL|FAX|〒','i');
-const COMP=/(株式会社|有限会社|合同会社|\(株\)|\(有\)|㈱|㈲|工業|製作所|工作所|産業|商事|商会|鉄工|機械|化成|工機|精機|電機|興業|化学|ゴム)/;
+const ANY_LBL=new RegExp([LBL.name,LBL.model,LBL.qty,LBL.due,LBL.order,LBL.cust].map(r=>r.source).join('|')+'|単価|金額|備考|摘要|合計|注文番号|受注No|出荷日|納入先|取引先|担当者|承認|TEL|FAX|〒','i');
+const COMP=/(株式会社|有限会社|合同会社|\(株\)|\(有\)|㈱|㈲|工業|製作所|工作所|産業|商事|商会|鉄工|機械|化成|工機|精機|電機|興業|化学|ゴム|営業所|工場)/;
 const UNIT='(?:個|コ|本|台|枚|ヶ|ケ|セット|set|pcs|PCS|式|組|ケース)';
 const MODEL_TOKEN=/[A-Za-z]{1,6}[\-_]?\d{1,7}(?:[\-_][A-Za-z0-9]+)*[A-Za-z]?/g;
+const compact=l=>l.replace(/[\s,，、|｜「」\[\]()（）:：.・]/g,'');
 function labelVal(lines,re){
  for(let i=0;i<lines.length;i++){const m=lines[i].match(re);if(!m)continue;
   let v=lines[i].slice(m.index+m[0].length).replace(/^[\s:：・=\-]+/,'');
@@ -505,54 +484,78 @@ function labelVal(lines,re){
   if(v)return v}
  return '';
 }
-function labelDate(lines,re,stop){
- for(let i=0;i<lines.length;i++){const m=lines[i].match(re);if(!m)continue;let s=lines[i].slice(m.index+m[0].length);const k=s.search(stop);if(k>=0)s=s.slice(0,k);
-  let ds=findDates(s);if(!ds.length&&lines[i+1])ds=findDates(lines[i+1]);if(ds.length)return ds[0].v}
- return '';
+// 日付の欄：同じ行 → 下の2行まで探す。月が読めない「2026年 月9日」は注文日から推定
+function labelDate(lines,re,stop,after){
+ for(let i=0;i<lines.length;i++){const m=lines[i].match(re);if(!m)continue;
+  const cands=[lines[i].slice(m.index+m[0].length),lines[i+1]||'',lines[i+2]||''];
+  for(let j=0;j<cands.length;j++){let c=cands[j];const k=c.search(stop);if(k>=0)c=c.slice(0,k);
+   const ds=findDates(c);if(ds.length)return{v:ds[0].v};
+   const pm=c.match(/(\d{4})\s*年\s*月?\s*(\d{1,2})\s*日/)||c.match(/(?:^|\s)年\s*月?\s*(\d{1,2})\s*日/);
+   if(pm){const day=+(pm[2]||pm[1]);const base=parseD(after||today());for(let a=0;a<3;a++){const d=new Date(base.getFullYear(),base.getMonth()+a,day);if(d.getDate()===day&&toStr(d)>(after||'')){return{v:toStr(d),guessed:true}}}}
+   if(j===0&&c.trim())break; // 同じ行に別の値があれば下の行は見ない
+  }}
+ return null;
 }
 const companyName=s=>{s=s.replace(/(TEL|FAX|電話|〒|住所|担当).*$/i,'').replace(/[:：]/g,' ').trim();const t=s.split(/\s+/);return(t.find(x=>COMP.test(x))||t[0]||'').slice(0,40)};
+const looksCompany=v=>!!v&&(COMP.test(v)||((v.match(new RegExp(JCH,'g'))||[]).length>=3&&!/\d/.test(v)));
 function parseOrderText(raw){
  const text=cleanOcr(raw),r={};if(!text)return r;
  const lines=text.split('\n'),nt=norm(text);
  let own='';try{own=norm(localStorage.getItem('kanri-own')||'')}catch(e){}
  const isOwn=s=>own&&norm(s).includes(own);
+ const hasJ=t=>new RegExp(JCH).test(t||''),okModel=t=>!!t&&/[A-Za-z0-9]/.test(t)&&/\d/.test(t)&&!hasJ(t);
  // 製品：登録済みの型番・製品名が文中にあれば最優先
  let best=null;
  for(const p of state.products){const k=norm(p.model);if(k.length>=3&&nt.includes(k)&&(!best||k.length>norm(best.model).length))best=p}
- if(!best)for(const p of state.products){const k=norm(p.name);if(k.length>=3&&nt.includes(k)&&(!best||k.length>norm(best.name).length))best=p}
  if(best){r.productId=best.id;r.name=best.name;r.model=best.model}
- // 表形式（品名・型番・数量が見出し行に並び、次の行に値）
+ // 表形式：見出し行（品名/型番 と 数量/単価/金額）の次の行に値
  const table={};
- const ANY_G=new RegExp(ANY_LBL.source,'gi');
- for(let i=0;i<lines.length-1;i++){const hs=[LBL.name,LBL.model,LBL.qty].filter(re=>re.test(lines[i])).length;if(hs<2)continue;
-  if(lines[i].replace(ANY_G,'').replace(/[\s|｜「」\[\]():：]/g,'').length>3)continue; // 見出しだけの行のみ表とみなす
-  const row=lines[i+1];if(ANY_LBL.test(row.slice(0,4)))continue;const toks=row.split(/\s+/).filter(Boolean);
+ for(let i=0;i<lines.length-1;i++){const h=compact(lines[i]);
+  if(!((LBL.name.test(h)||LBL.model.test(h))&&(LBL.qty.test(h)||/単価|金額/.test(h))))continue;
+  const row=lines[i+1];if(ANY_LBL.test(compact(row).slice(0,4)))continue;
+  const toks=row.split(/\s+/).filter(Boolean);
   const mt=toks.find(t=>/[A-Za-z]/.test(t)&&/\d/.test(t)&&/^[A-Za-z0-9\-_.\/]+$/.test(t));if(mt)table.model=mt;
-  const qt=toks.find(t=>t!==mt&&new RegExp(`^\\d[\\d,]{0,6}${UNIT}?$`).test(t));if(qt)table.qty=qt.replace(/[^\d]/g,'');
-  const nm=toks.find(t=>new RegExp(JCH).test(t)&&!new RegExp(`^\\d*${UNIT}$`).test(t));if(nm)table.name=nm;break}
- const hasJ=t=>new RegExp(JCH).test(t||''),okModel=t=>!!t&&/[A-Za-z0-9]/.test(t)&&/\d/.test(t)&&!hasJ(t);
+  const after=mt?toks.slice(toks.indexOf(mt)+1):toks;
+  const qt=after.find(t=>new RegExp(`^\\d{1,5}${UNIT}?$`).test(t))||after.find(t=>new RegExp(`^\\d[\\d,]{0,6}${UNIT}$`).test(t));if(qt)table.qty=qt.replace(/[^\d]/g,'');
+  const nm=toks.find(t=>hasJ(t)&&!new RegExp(`^\\d*${UNIT}$`).test(t));if(nm)table.name=nm;
+  if(/注文番号/.test(h)){const last=toks[toks.length-1];if(/^\d{4,12}$/.test(last)&&last!==qt)table.orderNo=last}
+  break}
  if(!r.model){let v=labelVal(lines,LBL.model);v=v&&v.split(/\s+/)[0];r.model=table.model||(okModel(v)?v:'')}
  if(!r.model){for(const l of lines){if(/(TEL|FAX|〒|No\.?|電話)/i.test(l))continue;const m=l.match(MODEL_TOKEN);if(m){r.model=m[0];break}}}
  if(!best&&r.model){const p=findProductBy('',r.model);if(p){r.productId=p.id;r.name=p.name;r.model=p.model}}
  if(!r.name){let v=table.name||'';if(!v){v=labelVal(lines,LBL.name);if(v){if(r.model)v=v.split(r.model).join(' ');v=v.replace(new RegExp(`\\d[\\d,]*\\s*${UNIT}`,'g'),' ').trim();v=v.split(/\s+/).find(hasJ)||''}}r.name=v}
- // 見出しが無い場合：型番と同じ行にある日本語の語を製品名とみなす
+ // 型番が読めなかった時だけ、登録済みの製品名で探す
+ if(!r.productId&&!r.model){let bn=null;for(const p of state.products){const k=norm(p.name);if(k.length>=3&&nt.includes(k)&&(!bn||k.length>norm(bn.name).length))bn=p}if(bn){r.productId=bn.id;r.name=bn.name;r.model=bn.model}}
+ const ANY_G=new RegExp(ANY_LBL.source,'gi');
  if(!r.name&&r.model){const l=lines.find(l=>l.includes(r.model));if(l){const t=l.split(/\s+/).map(x=>x.replace(ANY_G,'')).filter(x=>hasJ(x)&&!new RegExp(`^\\d*${UNIT}$`).test(x)).sort((a,b)=>b.length-a.length)[0];if(t)r.name=t}}
  // 数量
  let q=table.qty||'';if(!q){q=labelVal(lines,LBL.qty);q=(q.match(/\d[\d,]*/)||[''])[0].replace(/,/g,'')}
  if(!q){const m=text.match(new RegExp(`(\\d[\\d,]{0,6})\\s*${UNIT}(?![A-Za-z])`));if(m)q=m[1].replace(/,/g,'')}
  r.qty=q;
  // 日付
- r.dueDate=labelDate(lines,LBL.due,LBL.order);r.orderDate=labelDate(lines,LBL.order,LBL.due);
+ const od=labelDate(lines,LBL.order,LBL.due);r.orderDate=od?od.v:'';
+ const dd=labelDate(lines,LBL.due,LBL.order,r.orderDate);r.dueDate=dd?dd.v:'';if(dd&&dd.guessed)r.dueGuessed=true;
  const all=[...new Set(findDates(text).map(x=>x.v))].sort();const td=today();
  if(!r.orderDate&&!r.dueDate&&all.length){if(all.length>=2){r.orderDate=all[0];r.dueDate=all[all.length-1]}else if(all[0]>td)r.dueDate=all[0];else r.orderDate=all[0]}
  else if(r.orderDate&&!r.dueDate)r.dueDate=all.find(v=>v>r.orderDate)||'';
  else if(!r.orderDate&&r.dueDate)r.orderDate=all.filter(v=>v<r.dueDate&&v<=td).pop()||'';
- // 顧客名：過去の顧客名 → 見出し → 会社名らしい行（「御中」「様」は自社宛てなので除外）
+ // 顧客名：過去の顧客名 → 「客先」などの見出しの下 → 会社名らしい行（「御中」「様」は自社宛てなので除外）
  const known=[...new Set(state.orders.map(o=>o.customer).filter(c=>c&&norm(c).length>=2))].sort((a,b)=>b.length-a.length);
  r.customer=known.find(c=>nt.includes(norm(c))&&!isOwn(c))||'';
- if(!r.customer){const v=labelVal(lines,LBL.cust);if(v&&!isOwn(v))r.customer=companyName(v)}
+ if(!r.customer){for(let i=0;i<lines.length&&!r.customer;i++){const m=lines[i].match(LBL.cust);if(!m)continue;
+  const same=lines[i].slice(m.index+m[0].length).replace(/^[\s:：]+/,'');const cs=[same.split(ANY_LBL)[0],lines[i+1],lines[i+2],lines[i+3]];
+  for(const c of cs){if(!c)continue;const v=companyName(c);if(looksCompany(v)&&!isOwn(v)&&!/(御中|様|殿)$/.test(c.trim())){r.customer=v;break}}}}
  if(!r.customer){const l=lines.find(l=>COMP.test(l)&&!/(御中|様|殿|注文書|発注書|注文請書|見積)/.test(l)&&!isOwn(l));if(l)r.customer=companyName(l)}
  r.urgent=/(大至急|至急|特急|急ぎ|緊急|URGENT|ASAP)/i.test(text);
+ // 備考に入れる参考情報（受注No.・注文番号・使用ライニング・寸法など）
+ const ex=[];
+ const no=text.match(/受注\s*No\.?\s*[:：]?\s*([A-Za-z0-9\-]{4,})/i);if(no)ex.push('受注No.'+no[1]);
+ const on=table.orderNo||((text.match(/注文番号\s*[:：]?\s*([A-Za-z0-9\-]{4,})/)||[])[1]);if(on)ex.push('注文番号 '+on);
+ for(let i=0;i<lines.length;i++){
+  if(/使用ラ[イニンガグ]{1,4}/.test(lines[i])){const same=lines[i].replace(/.*使用ラ[イニンガグ]{1,4}/,'').split(ANY_LBL)[0].trim();const v=(same&&!/寸法/.test(same)?same:(lines[i+1]||'')).split(/\s+/)[0];if(v)ex.push('使用ライニング '+v)}
+  if(/寸法/.test(lines[i])){const sz=/\d+(?:\.\d+)?\s*[*×xX]\s*\d+(?:\.\d+)?(?:\s*-\s*\d+(?:\.\d+)?)?/g;const ms=((lines[i].split('寸法').pop())+' '+(lines[i+1]||'')).match(sz);if(ms){ex.push('加工寸法 '+ms[ms.length-1].replace(/\s/g,''));}}
+ }
+ r.extra=[...new Set(ex)].join(' / ');
  return r;
 }
 
@@ -569,6 +572,7 @@ function openOcrDialog(onApply){
    <p class="hint">上の欄を長押しして「テキストをスキャン」を選ぶと、カメラを向けるだけで直接読み取ることもできます。</p></details>
   <h3 class="sub">入力される内容 <small style="font-weight:500;color:var(--muted)">（違っていたら直してください）</small></h3>
   <div class="grid">${FIELDS.map(([n,l,c])=>`<label class="f ${c}" data-fld="${n}"><span>${l}</span><input name="${n}" ${/Date/.test(n)?'type="date"':n==='qty'?'type="number" inputmode="numeric"':''}></label>`).join('')}
+   <label class="f c6" data-fld="extra"><span>備考に入れる内容 <small>受注No.・注文番号・ライニング・寸法など</small></span><input name="extra"></label>
    <label class="f c6 urgent-toggle"><input type="checkbox" name="urgent"><span class="box">${I('flag')}急ぎの品</span></label></div>
   <div class="matchinfo"></div>
   <div class="ocr-opts"><label class="chk"><input type="checkbox" name="attach" checked>写真を備考に添付する</label><label class="chk"><input type="checkbox" name="appendText">読み取った文字を備考に追記する</label></div>
@@ -576,8 +580,9 @@ function openOcrDialog(onApply){
  <div class="mfoot"><span class="sp"></span><button class="btn" data-close>キャンセル</button><button class="btn primary" data-o="apply">${I('check')}この内容で入力</button></div>`,{wide:true,sticky:true});
  const form=$('form',w),F=n=>form.elements.namedItem(n),ta=F('ocrText');
  const update=()=>{
-  const r=parseOrderText(ta.value);const map={customer:r.customer,pname:r.name,pmodel:r.model,qty:r.qty,orderDate:r.orderDate,dueDate:r.dueDate};
+  const r=parseOrderText(ta.value);const map={customer:r.customer,pname:r.name,pmodel:r.model,qty:r.qty,orderDate:r.orderDate,dueDate:r.dueDate,extra:r.extra};
   for(const[n,v]of Object.entries(map)){if(touched.has(n))continue;F(n).value=v||'';$(`[data-fld="${n}"]`,w).classList.toggle('got',!!v)}
+  const dl=$('[data-fld="dueDate"] > span',w);if(!touched.has('dueDate'))dl.innerHTML=r.dueGuessed?'納期 <em>月が読めなかったため推定しました。確認してください</em>':'納期';$('[data-fld="dueDate"]',w).classList.toggle('guess',!!r.dueGuessed&&!touched.has('dueDate'));
   if(!touched.has('urgent'))F('urgent').checked=!!r.urgent;
   const p=prodById(r.productId);const mi=$('.matchinfo',w);
   mi.innerHTML=!ta.value.trim()?'':p?`<span class="ok">${I('check')} 登録済みの製品「${esc(p.name||'')}${p.model?' / '+esc(p.model):''}」と一致しました。図面も自動で入ります。</span>`:(F('pname').value||F('pmodel').value)?'<span class="nw">登録済みの製品とは一致しませんでした。新しい製品として登録されます。</span>':'';
@@ -604,7 +609,7 @@ function openOcrDialog(onApply){
    if(busy){toast('読み取りが終わるまでお待ちください');return}
    const r={customer:F('customer').value.trim(),name:F('pname').value.trim(),model:F('pmodel').value.trim(),qty:F('qty').value.trim(),orderDate:F('orderDate').value,dueDate:F('dueDate').value,urgent:F('urgent').checked};
    if(F('attach').checked&&photo){const b=await compress(photo,1600,.82);r.photoId=(await storeFile(b,photo.name||'注文書.jpg')).id}
-   if(F('appendText').checked&&ta.value.trim())r.noteText=ta.value.trim();
+   const nt=[F('extra').value.trim(),F('appendText').checked?ta.value.trim():''].filter(Boolean).join('\n');if(nt)r.noteText=nt;
    delete w.dataset.sticky;closeModal(w);onApply(r);
   }
  });
@@ -912,7 +917,7 @@ async function renderSettings(){
  <div class="panel"><h3>写真から自動入力</h3>
   <p>注文書の写真から文字を読み取る機能です。読み取りはiPadの中で行い、写真が外部に送られることはありません。</p>
   <div class="kv"><div>オフラインでの読み取り<b id="ocrState">確認中…</b></div></div>
-  <div class="btnrow" style="margin:6px 0 16px"><button class="btn" data-action="ocr-download">${I('down')}読み取り機能をダウンロード（約14MB）</button></div>
+  <div class="btnrow" style="margin:6px 0 16px"><button class="btn" data-action="ocr-download">${I('down')}読み取り機能をダウンロード（約32MB）</button></div>
   <label class="f" style="max-width:420px"><span>自社名（読み取り時に顧客名と間違えないよう除外します）</span><input id="ownName" placeholder="例：〇〇工業株式会社" value="${esc((()=>{try{return localStorage.getItem('kanri-own')||''}catch(e){return ''}})())}"></label></div>
  <div class="panel"><h3>使い方のヒント</h3><ul class="steps">
   <li>注文で入力した製品名・型番は製品管理に自動登録され、図面は次回の注文でも呼び出されます。</li>
@@ -920,7 +925,7 @@ async function renderSettings(){
   <li>「写真から登録」で注文書を撮ると、顧客名・製品・数量・納期を読み取ります。登録済みの型番が写っていれば、製品と図面も自動で呼び出します。</li>
   <li>製品一覧の「撮影して登録」で、撮った写真がその製品にすぐ保存されます。</li>
   <li>音声ボタンが使えない場合は、キーボードのマイクボタンで話すと入力できます。</li></ul></div>
- <p class="hint" style="text-align:center">受注・製品管理 v1.1</p>`;
+ <p class="hint" style="text-align:center">受注・製品管理 v1.2</p>`;
  $('#ownName').onchange=e=>{try{localStorage.setItem('kanri-own',e.target.value.trim())}catch(err){}toast('自社名を保存しました')};
  showOcrState();
  try{if(navigator.storage&&navigator.storage.estimate){const e=await navigator.storage.estimate();$('#usage').textContent=(e.usage/1048576).toFixed(1)+' MB'}}catch(e){}
